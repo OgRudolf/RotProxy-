@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "rotproxy",
+  "version": "${version}",
+  "name": "RotProxy",
+  "description": "Routes all multiplayer connections through a configured proxy. Red and deadly.",
+  "authors": ["RotProxy"],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/rotproxy/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.rotproxy.RotProxyMod"
+    ]
+  },
+  "mixins": [
+    "rotproxy.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.17.2",
+    "fabric-api": "*",
+    "minecraft": ">=1.21.10 <1.21.11",
+    "java": ">=21"
+  }
+}
