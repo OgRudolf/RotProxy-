@@ -44,11 +44,6 @@ build\libs\rotproxy-1.1.0.jar
 - Never upload your local config file `rotproxy_profiles.json`.
 - If you accidentally posted working proxy credentials anywhere, rotate them with your proxy provider.
 
-## Publishing Notes
-
-- GitHub should contain source code only.
-- Modrinth should contain release jars only.
-- Review screenshots before uploading them to make sure they do not show proxy credentials or personal information.
 
 ## License
 
