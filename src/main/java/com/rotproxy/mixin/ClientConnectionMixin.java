@@ -3,6 +3,7 @@ package com.rotproxy.mixin;
 import com.rotproxy.proxy.ProxyManager;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.proxy.ProxyHandler;
+import net.minecraft.network.ClientConnection;
 import net.minecraft.network.NetworkSide;
 import net.minecraft.network.handler.PacketSizeLogger;
 import org.spongepowered.asm.mixin.Mixin;

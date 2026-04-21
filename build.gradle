@@ -3,11 +3,21 @@ plugins {
 	id 'maven-publish'
 }
 
-version = project.mod_version
-group = project.maven_group
+def minecraftVersion = findProperty("minecraft_version").toString()
+def yarnMappings = findProperty("yarn_mappings").toString()
+def loaderVersion = findProperty("loader_version").toString()
+def fabricVersion = findProperty("fabric_version").toString()
+def nettyVersion = findProperty("netty_version").toString()
+def modVersion = findProperty("mod_version").toString()
+def mavenGroup = findProperty("maven_group").toString()
+def archivesBaseName = findProperty("archives_base_name").toString()
+def minecraftDependency = findProperty("minecraft_dependency").toString()
+
+version = "${modVersion}+mc${minecraftVersion}"
+group = mavenGroup
 
 base {
-	archivesName = project.archives_base_name
+	archivesName = archivesBaseName
 }
 
 repositories {
@@ -15,25 +25,33 @@ repositories {
 }
 
 dependencies {
-	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+	minecraft "com.mojang:minecraft:${minecraftVersion}"
+	mappings "net.fabricmc:yarn:${yarnMappings}:v2"
+	modImplementation "net.fabricmc:fabric-loader:${loaderVersion}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${fabricVersion}"
 
-	implementation "io.netty:netty-handler-proxy:${project.netty_version}"
-	implementation "io.netty:netty-codec-http:${project.netty_version}"
-	implementation "io.netty:netty-codec-socks:${project.netty_version}"
+	implementation "io.netty:netty-handler-proxy:${nettyVersion}"
+	implementation "io.netty:netty-codec-http:${nettyVersion}"
+	implementation "io.netty:netty-codec-socks:${nettyVersion}"
 
-	include "io.netty:netty-handler-proxy:${project.netty_version}"
-	include "io.netty:netty-codec-http:${project.netty_version}"
-	include "io.netty:netty-codec-socks:${project.netty_version}"
+	include "io.netty:netty-handler-proxy:${nettyVersion}"
+	include "io.netty:netty-codec-http:${nettyVersion}"
+	include "io.netty:netty-codec-socks:${nettyVersion}"
 }
 
 processResources {
-	inputs.property "version", project.version
+	inputs.properties(
+			version: project.version,
+			minecraft_dependency: minecraftDependency,
+			minecraft_version: minecraftVersion
+	)
 
 	filesMatching("fabric.mod.json") {
-		expand "version": project.version
+		expand(
+				version: project.version,
+				minecraft_dependency: minecraftDependency,
+				minecraft_version: minecraftVersion
+		)
 	}
 }
 

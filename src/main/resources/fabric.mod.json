@@ -3,7 +3,7 @@
   "id": "rotproxy",
   "version": "${version}",
   "name": "RotProxy",
-  "description": "Routes all multiplayer connections through a configured proxy. Red and deadly.",
+  "description": "Client-side Fabric proxy mod with proxy health checks, a kill switch, and a Multiplayer quick-config button.",
   "authors": ["RotProxy"],
   "contact": {},
   "license": "MIT",
@@ -20,7 +20,7 @@
   "depends": {
     "fabricloader": ">=0.17.2",
     "fabric-api": "*",
-    "minecraft": ">=1.21.10 <1.21.11",
+    "minecraft": "${minecraft_dependency}",
     "java": ">=21"
   }
 }

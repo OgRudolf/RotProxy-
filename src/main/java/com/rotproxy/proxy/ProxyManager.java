@@ -25,6 +25,9 @@ import io.netty.handler.proxy.HttpProxyHandler;
 import io.netty.handler.proxy.ProxyConnectionEvent;
 import io.netty.handler.proxy.ProxyHandler;
 import io.netty.handler.proxy.Socks5ProxyHandler;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.toast.SystemToast;
+import net.minecraft.text.Text;
 
 import java.net.Authenticator;
 import java.net.InetSocketAddress;
@@ -33,9 +36,15 @@ import java.net.SocketAddress;
 import java.net.URI;
 import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -45,7 +54,11 @@ public final class ProxyManager {
     private static final URI IP_CHECK_URI = URI.create("http://api.ipify.org/");
     private static final String IP_CHECK_HOST = IP_CHECK_URI.getHost();
     private static final int IP_CHECK_PORT = 80;
+    public static final long HEARTBEAT_INTERVAL_SECONDS = 15L;
+
     private static final Object AUTH_LOCK = new Object();
+    private static final DateTimeFormatter PROBE_TIME_FORMAT =
+            DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault());
 
     public enum Status {
         DISABLED,
@@ -54,13 +67,25 @@ public final class ProxyManager {
         ERROR
     }
 
+    public record ProbeOutcome(boolean success, String ipAddress, long latencyMs, String errorMessage) {
+        public static ProbeOutcome success(String ipAddress, long latencyMs) {
+            return new ProbeOutcome(true, ipAddress, latencyMs, "");
+        }
+
+        public static ProbeOutcome failure(String errorMessage) {
+            return new ProbeOutcome(false, "Unknown", -1L, sanitizeMessage(errorMessage));
+        }
+    }
+
     private static volatile Status status = Status.DISABLED;
     private static volatile String currentIp = "Unknown";
     private static volatile long latencyMs = -1L;
     private static volatile ProxyProfile activeProfile;
     private static volatile String lastError = "";
+    private static volatile long lastProbeAt = -1L;
 
     private static ScheduledExecutorService scheduler;
+    private static ExecutorService probeExecutor;
     private static ScheduledFuture<?> heartbeatTask;
     private static NioEventLoopGroup probeEventLoop;
 
@@ -74,6 +99,11 @@ public final class ProxyManager {
 
         scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "RotProxy-Heartbeat");
+            thread.setDaemon(true);
+            return thread;
+        });
+        probeExecutor = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "RotProxy-Worker");
             thread.setDaemon(true);
             return thread;
         });
@@ -115,11 +145,12 @@ public final class ProxyManager {
         currentIp = "Checking...";
         latencyMs = -1L;
         lastError = "";
+        lastProbeAt = -1L;
 
         ProxyConfig.setEnabled(true);
         ProxyConfig.save();
 
-        testAndUpdate(activeProfile);
+        refreshProxyState(activeProfile, false);
         startHeartbeat(activeProfile);
     }
 
@@ -136,6 +167,7 @@ public final class ProxyManager {
         currentIp = "Unknown";
         latencyMs = -1L;
         lastError = "";
+        lastProbeAt = -1L;
     }
 
     public static ProxyHandler createNettyProxyHandler() {
@@ -170,26 +202,64 @@ public final class ProxyManager {
         return ProxyConfig.isEnabled() && profile != null && profile.isValid();
     }
 
-    private static void testAndUpdate(ProxyProfile profile) {
-        CompletableFuture.runAsync(() -> {
-            try {
-                ProxyProbeResult result = probe(profile);
-                if (!sameProfile(profile)) {
-                    return;
-                }
+    public static CompletableFuture<ProbeOutcome> testProfile(ProxyProfile profile) {
+        if (profile == null || !profile.isValid()) {
+            return CompletableFuture.completedFuture(ProbeOutcome.failure("Enter a valid host and port before testing."));
+        }
 
-                latencyMs = result.latencyMs();
-                currentIp = result.ipAddress();
-                status = Status.CONNECTED;
-                lastError = "";
-            } catch (Exception exception) {
-                if (!sameProfile(profile)) {
-                    return;
-                }
+        ProxyProfile snapshot = profile.copy();
+        return runProbeAsync(snapshot)
+                .handle((result, throwable) -> throwable == null
+                        ? ProbeOutcome.success(result.ipAddress(), result.latencyMs())
+                        : ProbeOutcome.failure(describeException(unwrapCompletionException(throwable))));
+    }
 
-                setErrorState(exception);
+    public static boolean shouldBlockServerConnections() {
+        return status != Status.CONNECTED;
+    }
+
+    public static Text getKillSwitchReasonText() {
+        return switch (status) {
+            case CONNECTING -> Text.literal("RotProxy is still verifying the active proxy. Wait until the status is CONNECTED before joining a server.");
+            case ERROR -> Text.literal("RotProxy blocked multiplayer because the proxy is unhealthy: " + sanitizeMessage(lastError));
+            case DISABLED -> Text.literal("RotProxy blocked multiplayer because the proxy is disabled. Enable a healthy proxy first.");
+            case CONNECTED -> Text.literal("RotProxy is healthy.");
+        };
+    }
+
+    public static String getHeartbeatSummary() {
+        return "Every " + HEARTBEAT_INTERVAL_SECONDS + "s | last check " + getLastProbeLabel();
+    }
+
+    public static String getLastProbeLabel() {
+        return lastProbeAt < 0 ? "never" : PROBE_TIME_FORMAT.format(Instant.ofEpochMilli(lastProbeAt));
+    }
+
+    private static void refreshProxyState(ProxyProfile profile, boolean engageKillSwitchOnFailure) {
+        runProbeAsync(profile).whenComplete((result, throwable) -> {
+            if (!sameProfile(profile)) {
+                return;
             }
+
+            if (throwable != null) {
+                setErrorState(describeException(unwrapCompletionException(throwable)), engageKillSwitchOnFailure);
+                return;
+            }
+
+            applyProbeResult(result);
         });
+    }
+
+    private static CompletableFuture<ProxyProbeResult> runProbeAsync(ProxyProfile profile) {
+        initialize();
+        ProxyProfile snapshot = profile.copy();
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return probe(snapshot);
+            } catch (Exception exception) {
+                throw new CompletionException(exception);
+            }
+        }, probeExecutor);
     }
 
     private static ProxyProbeResult probe(ProxyProfile profile) throws Exception {
@@ -324,16 +394,8 @@ public final class ProxyManager {
                 return;
             }
 
-            try {
-                ProxyProbeResult result = probe(profile);
-                latencyMs = result.latencyMs();
-                currentIp = result.ipAddress();
-                status = Status.CONNECTED;
-                lastError = "";
-            } catch (Exception exception) {
-                setErrorState(exception);
-            }
-        }, 15L, 15L, TimeUnit.SECONDS);
+            refreshProxyState(profile, true);
+        }, HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_INTERVAL_SECONDS, TimeUnit.SECONDS);
     }
 
     private static void stopHeartbeat() {
@@ -353,12 +415,47 @@ public final class ProxyManager {
                 && Objects.equals(current.password, profile.password);
     }
 
-    private static void setErrorState(Exception exception) {
+    private static void applyProbeResult(ProxyProbeResult result) {
+        status = Status.CONNECTED;
+        latencyMs = result.latencyMs();
+        currentIp = result.ipAddress();
+        lastError = "";
+        lastProbeAt = System.currentTimeMillis();
+    }
+
+    private static void setErrorState(String errorMessage, boolean engageKillSwitch) {
+        Status previousStatus = status;
         status = Status.ERROR;
         currentIp = "Unknown";
         latencyMs = -1L;
-        lastError = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+        lastError = sanitizeMessage(errorMessage);
+        lastProbeAt = System.currentTimeMillis();
         RotProxyMod.LOGGER.warn("RotProxy proxy probe failed: {}", lastError);
+
+        if (engageKillSwitch && previousStatus != Status.ERROR) {
+            engageKillSwitch(lastError);
+        }
+    }
+
+    private static void engageKillSwitch(String errorMessage) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client == null) {
+            return;
+        }
+
+        Text detail = Text.literal("Proxy heartbeat failed: " + sanitizeMessage(errorMessage));
+        client.execute(() -> {
+            SystemToast.show(
+                    client.getToastManager(),
+                    SystemToast.Type.PERIODIC_NOTIFICATION,
+                    Text.literal("RotProxy Kill Switch"),
+                    detail
+            );
+
+            if (client.getNetworkHandler() != null) {
+                client.getNetworkHandler().getConnection().disconnect(detail);
+            }
+        });
     }
 
     private static boolean hasCredentials(ProxyProfile profile) {
@@ -396,6 +493,32 @@ public final class ProxyManager {
     public static String getActiveProfileName() {
         ProxyProfile profile = activeProfile;
         return profile == null ? "None" : profile.name;
+    }
+
+    public static String getKillSwitchStateLabel() {
+        return shouldBlockServerConnections() ? "BLOCKING" : "SAFE";
+    }
+
+    private static String describeException(Throwable throwable) {
+        if (throwable == null) {
+            return "Unknown proxy error";
+        }
+
+        return sanitizeMessage(throwable.getMessage() == null ? throwable.getClass().getSimpleName() : throwable.getMessage());
+    }
+
+    private static Throwable unwrapCompletionException(Throwable throwable) {
+        if (throwable instanceof CompletionException || throwable instanceof ExecutionException) {
+            return throwable.getCause() == null ? throwable : throwable.getCause();
+        }
+        return throwable;
+    }
+
+    private static String sanitizeMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return "Unknown proxy error";
+        }
+        return message.replace('\n', ' ').replace('\r', ' ').trim();
     }
 
     private record ProxyProbeResult(String ipAddress, long latencyMs) {

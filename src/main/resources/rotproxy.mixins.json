@@ -5,6 +5,8 @@
   "mixins": [],
   "client": [
     "ClientConnectionMixin",
+    "ConnectScreenMixin",
+    "MultiplayerServerListPingerMixin",
     "RotProxyMultiplayerScreenMixin"
   ],
   "injectors": {

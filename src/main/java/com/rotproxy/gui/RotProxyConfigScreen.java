@@ -15,7 +15,7 @@ import java.util.List;
 public class RotProxyConfigScreen extends Screen {
     private static final int LEFT_PANEL_WIDTH = 356;
     private static final int RIGHT_PANEL_WIDTH = 190;
-    private static final int PANEL_HEIGHT = 404;
+    private static final int MAX_PANEL_HEIGHT = 452;
     private static final int PANEL_GAP = 20;
     private static final int SECTION_GAP = 22;
     private static final int FIELD_HEIGHT = 20;
@@ -26,6 +26,9 @@ public class RotProxyConfigScreen extends Screen {
     private int leftX;
     private int topY;
     private int rightX;
+    private int panelHeight;
+    private int actionY;
+    private int sidebarButtonY;
 
     private int selectedIndex;
     private ProxyProfile editing;
@@ -35,7 +38,11 @@ public class RotProxyConfigScreen extends Screen {
     private RotProxyTextFieldWidget portField;
     private RotProxyTextFieldWidget userField;
     private RotProxyTextFieldWidget passField;
+    private RotProxyButtonWidget testButton;
     private int typeButtonY;
+    private String testFeedback = "Run a proxy test before joining a server.";
+    private int testFeedbackColor = RotProxyTheme.TEXT_MUTED;
+    private boolean testInProgress;
 
     public RotProxyConfigScreen(Screen parent) {
         super(Text.literal("RotProxy"));
@@ -44,8 +51,9 @@ public class RotProxyConfigScreen extends Screen {
 
     @Override
     protected void init() {
+        panelHeight = Math.min(MAX_PANEL_HEIGHT, height - 24);
         leftX = (width - LEFT_PANEL_WIDTH - RIGHT_PANEL_WIDTH - PANEL_GAP) / 2;
-        topY = (height - PANEL_HEIGHT) / 2;
+        topY = Math.max(12, (height - panelHeight) / 2);
         rightX = leftX + LEFT_PANEL_WIDTH + PANEL_GAP;
 
         if (ProxyConfig.getProfiles().isEmpty()) {
@@ -86,16 +94,19 @@ public class RotProxyConfigScreen extends Screen {
                 button -> cycleProxyType()
         ));
 
-        int actionY = topY + PANEL_HEIGHT - 38;
+        actionY = topY + panelHeight - 64;
         int actionWidth = (fieldWidth - 8) / 2;
-        addDrawableChild(new RotProxyButtonWidget(fieldX, actionY - 26, fieldWidth, BUTTON_HEIGHT, Text.literal("APPLY"), button -> applyProxy()));
-        addDrawableChild(new RotProxyButtonWidget(fieldX, actionY, actionWidth, BUTTON_HEIGHT, Text.literal("CLOSE"), button -> close()));
-        addDrawableChild(new RotProxyButtonWidget(fieldX + actionWidth + 8, actionY, actionWidth, BUTTON_HEIGHT, Text.literal("DISABLE"), button -> disableProxy()));
+        addDrawableChild(new RotProxyButtonWidget(fieldX, actionY, actionWidth, BUTTON_HEIGHT, Text.literal("APPLY"), button -> applyProxy()));
+        testButton = addDrawableChild(new RotProxyButtonWidget(fieldX + actionWidth + 8, actionY, actionWidth, BUTTON_HEIGHT, Text.literal("TEST"), button -> testProxy()));
+        addDrawableChild(new RotProxyButtonWidget(fieldX, actionY + 26, actionWidth, BUTTON_HEIGHT, Text.literal("CLOSE"), button -> close()));
+        addDrawableChild(new RotProxyButtonWidget(fieldX + actionWidth + 8, actionY + 26, actionWidth, BUTTON_HEIGHT, Text.literal("DISABLE"), button -> disableProxy()));
 
         int sidebarButtonWidth = (RIGHT_PANEL_WIDTH - 28) / 2;
-        int sidebarButtonY = topY + PANEL_HEIGHT - 38;
-        addDrawableChild(new RotProxyButtonWidget(rightX + 10, sidebarButtonY, sidebarButtonWidth, BUTTON_HEIGHT, Text.literal("NEW"), button -> createProfile()));
-        addDrawableChild(new RotProxyButtonWidget(rightX + 18 + sidebarButtonWidth, sidebarButtonY, sidebarButtonWidth, BUTTON_HEIGHT, Text.literal("DELETE"), button -> deleteProfile()));
+        sidebarButtonY = topY + panelHeight - 64;
+        addDrawableChild(new RotProxyButtonWidget(rightX + 10, sidebarButtonY, sidebarButtonWidth, BUTTON_HEIGHT, Text.literal("CLEAR"), button -> clearSelectedProfile()));
+        addDrawableChild(new RotProxyButtonWidget(rightX + 18 + sidebarButtonWidth, sidebarButtonY, sidebarButtonWidth, BUTTON_HEIGHT, Text.literal("RESET"), button -> resetAllProfiles()));
+        addDrawableChild(new RotProxyButtonWidget(rightX + 10, sidebarButtonY + 26, sidebarButtonWidth, BUTTON_HEIGHT, Text.literal("NEW"), button -> createProfile()));
+        addDrawableChild(new RotProxyButtonWidget(rightX + 18 + sidebarButtonWidth, sidebarButtonY + 26, sidebarButtonWidth, BUTTON_HEIGHT, Text.literal("DELETE"), button -> deleteProfile()));
     }
 
     private RotProxyTextFieldWidget createField(int x, int y, int width, boolean password, String placeholder, String value) {
@@ -119,13 +130,25 @@ public class RotProxyConfigScreen extends Screen {
             return;
         }
 
-        editing.name = blankToFallback(nameField.getText(), "Profile " + (selectedIndex + 1));
-        editing.host = hostField.getText().trim();
-        editing.username = userField.getText().trim();
-        editing.password = passField.getText();
+        ProxyProfile draft = buildDraftProfile();
+        editing.name = draft.name;
+        editing.host = draft.host;
+        editing.port = draft.port;
+        editing.username = draft.username;
+        editing.password = draft.password;
+        editing.type = draft.type;
+    }
+
+    private ProxyProfile buildDraftProfile() {
+        ProxyProfile draft = editing == null ? new ProxyProfile("Profile " + (selectedIndex + 1)) : editing.copy();
+        draft.name = blankToFallback(nameField.getText(), "Profile " + (selectedIndex + 1));
+        draft.host = hostField.getText().trim();
+        draft.username = userField.getText().trim();
+        draft.password = passField.getText();
 
         String portValue = portField.getText().trim();
-        editing.port = portValue.isEmpty() ? 0 : Integer.parseInt(portValue);
+        draft.port = portValue.isEmpty() ? 0 : Integer.parseInt(portValue);
+        return draft;
     }
 
     private void syncFieldsFromProfile() {
@@ -146,11 +169,14 @@ public class RotProxyConfigScreen extends Screen {
             saveFields();
         } catch (NumberFormatException exception) {
             editing.port = 0;
+            setTestFeedback("Enter a valid numeric port before enabling the proxy.", RotProxyTheme.ERROR);
+            return;
         }
 
         ProxyConfig.setActiveProfileIndex(selectedIndex);
         ProxyConfig.save();
         ProxyManager.applyProxy(editing);
+        setTestFeedback("Proxy armed. All multiplayer stays blocked until health turns CONNECTED.", RotProxyTheme.WARNING);
     }
 
     private void disableProxy() {
@@ -162,6 +188,54 @@ public class RotProxyConfigScreen extends Screen {
 
         ProxyConfig.save();
         ProxyManager.clearProxy();
+        setTestFeedback("Proxy disabled. Kill switch is now blocking all multiplayer traffic.", RotProxyTheme.WARNING);
+    }
+
+    private void testProxy() {
+        if (testInProgress) {
+            return;
+        }
+
+        ProxyProfile draft;
+        try {
+            draft = buildDraftProfile();
+        } catch (NumberFormatException exception) {
+            setTestFeedback("Enter a valid numeric port before testing.", RotProxyTheme.ERROR);
+            return;
+        }
+
+        if (!draft.isValid()) {
+            setTestFeedback("Enter a valid host and port before testing.", RotProxyTheme.ERROR);
+            return;
+        }
+
+        testInProgress = true;
+        if (testButton != null) {
+            testButton.active = false;
+        }
+        setTestFeedback("Testing proxy route...", RotProxyTheme.WARNING);
+
+        ProxyManager.testProfile(draft).whenComplete((result, throwable) -> {
+            if (client == null) {
+                return;
+            }
+
+            client.execute(() -> {
+                testInProgress = false;
+                if (testButton != null) {
+                    testButton.active = true;
+                }
+
+                if (throwable != null || result == null || !result.success()) {
+                    String error = throwable != null ? throwable.getMessage() : result == null ? "Unknown proxy error" : result.errorMessage();
+                    setTestFeedback("Test failed: " + error, RotProxyTheme.ERROR);
+                    return;
+                }
+
+                String latencyText = result.latencyMs() >= 0 ? result.latencyMs() + " ms" : "--";
+                setTestFeedback("OK | Exit IP " + result.ipAddress() + " | " + latencyText, RotProxyTheme.SUCCESS);
+            });
+        });
     }
 
     private void createProfile() {
@@ -176,6 +250,26 @@ public class RotProxyConfigScreen extends Screen {
         loadSelectedProfile();
         syncFieldsFromProfile();
         ProxyConfig.save();
+        setTestFeedback("New profile created. Fill it in and run TEST.", RotProxyTheme.TEXT_MUTED);
+    }
+
+    private void clearSelectedProfile() {
+        ProxyConfig.clearProfile(selectedIndex);
+        loadSelectedProfile();
+        syncFieldsFromProfile();
+        ProxyConfig.save();
+        ProxyManager.clearProxy();
+        setTestFeedback("Selected profile cleared. Host, port, username, and password are now blank.", RotProxyTheme.WARNING);
+    }
+
+    private void resetAllProfiles() {
+        ProxyConfig.resetAllProfiles();
+        ProxyManager.clearProxy();
+        selectedIndex = 0;
+        loadSelectedProfile();
+        syncFieldsFromProfile();
+        ProxyConfig.save();
+        setTestFeedback("All stored profiles were reset to a blank default profile.", RotProxyTheme.WARNING);
     }
 
     private void deleteProfile() {
@@ -189,6 +283,7 @@ public class RotProxyConfigScreen extends Screen {
         loadSelectedProfile();
         syncFieldsFromProfile();
         ProxyConfig.save();
+        setTestFeedback("Profile deleted.", RotProxyTheme.TEXT_MUTED);
     }
 
     @Override
@@ -226,6 +321,7 @@ public class RotProxyConfigScreen extends Screen {
                 selectedIndex = index;
                 loadSelectedProfile();
                 syncFieldsFromProfile();
+                setTestFeedback("Loaded profile " + editing.name + ".", RotProxyTheme.TEXT_MUTED);
                 return true;
             }
         }
@@ -237,8 +333,8 @@ public class RotProxyConfigScreen extends Screen {
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         context.fill(0, 0, width, height, RotProxyTheme.BACKDROP);
 
-        RotProxyTheme.drawPanel(context, leftX, topY, LEFT_PANEL_WIDTH, PANEL_HEIGHT);
-        RotProxyTheme.drawPanel(context, rightX, topY, RIGHT_PANEL_WIDTH, PANEL_HEIGHT);
+        RotProxyTheme.drawPanel(context, leftX, topY, LEFT_PANEL_WIDTH, panelHeight);
+        RotProxyTheme.drawPanel(context, rightX, topY, RIGHT_PANEL_WIDTH, panelHeight);
 
         context.drawCenteredTextWithShadow(textRenderer, Text.literal("ROTPROXY"), leftX + LEFT_PANEL_WIDTH / 2, topY + 16, RotProxyTheme.TEXT);
         context.drawCenteredTextWithShadow(textRenderer, Text.literal("STORED PROXIES"), rightX + RIGHT_PANEL_WIDTH / 2, topY + 16, RotProxyTheme.TEXT);
@@ -264,10 +360,10 @@ public class RotProxyConfigScreen extends Screen {
             case CONNECTED -> RotProxyTheme.SUCCESS;
             case CONNECTING -> RotProxyTheme.WARNING;
             case ERROR -> RotProxyTheme.ERROR;
-            case DISABLED -> RotProxyTheme.TEXT_MUTED;
+            case DISABLED -> RotProxyTheme.WARNING;
         };
 
-        int statusY = typeButtonY + BUTTON_HEIGHT + 18;
+        int statusY = actionY - 96;
         context.fill(leftX + 16, statusY - 8, leftX + LEFT_PANEL_WIDTH - 16, statusY - 7, RotProxyTheme.BORDER);
         context.drawTextWithShadow(textRenderer, Text.literal("STATUS: " + status.name()), leftX + 16, statusY, color);
         context.drawTextWithShadow(textRenderer, Text.literal("ACTIVE: " + ProxyManager.getActiveProfileName()), leftX + 16, statusY + 12, RotProxyTheme.TEXT_DIM);
@@ -276,11 +372,32 @@ public class RotProxyConfigScreen extends Screen {
         long latency = ProxyManager.getLatencyMs();
         String latencyText = latency >= 0 ? latency + " ms" : "--";
         context.drawTextWithShadow(textRenderer, Text.literal("LATENCY: " + latencyText), leftX + 16, statusY + 36, RotProxyTheme.TEXT_DIM);
+        context.drawTextWithShadow(
+                textRenderer,
+                Text.literal("KILL SWITCH: " + ProxyManager.getKillSwitchStateLabel()),
+                leftX + 16,
+                statusY + 48,
+                ProxyManager.shouldBlockServerConnections() ? RotProxyTheme.WARNING : RotProxyTheme.SUCCESS
+        );
+
+        context.drawTextWithShadow(
+                textRenderer,
+                Text.literal(textRenderer.trimToWidth("HEARTBEAT: " + ProxyManager.getHeartbeatSummary(), LEFT_PANEL_WIDTH - 32)),
+                leftX + 16,
+                statusY + 60,
+                RotProxyTheme.TEXT_MUTED
+        );
 
         String errorText = ProxyManager.getLastError();
-        if (!errorText.isBlank()) {
-            context.drawTextWithShadow(textRenderer, Text.literal(textRenderer.trimToWidth(errorText, LEFT_PANEL_WIDTH - 32)), leftX + 16, statusY + 48, RotProxyTheme.ERROR);
-        }
+        String diagnosticText = !errorText.isBlank() ? "ERROR: " + errorText : "TEST: " + testFeedback;
+        int diagnosticColor = !errorText.isBlank() ? RotProxyTheme.ERROR : testFeedbackColor;
+        context.drawTextWithShadow(
+                textRenderer,
+                Text.literal(textRenderer.trimToWidth(diagnosticText, LEFT_PANEL_WIDTH - 32)),
+                leftX + 16,
+                statusY + 72,
+                diagnosticColor
+        );
     }
 
     private void drawSidebarEntries(DrawContext context, int mouseX, int mouseY) {
@@ -314,6 +431,11 @@ public class RotProxyConfigScreen extends Screen {
 
     private static String blankToFallback(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value.trim();
+    }
+
+    private void setTestFeedback(String message, int color) {
+        testFeedback = message;
+        testFeedbackColor = color;
     }
 
     @Override

@@ -69,32 +69,84 @@ if (-not (Test-Path $wrapperJar)) {
     Write-Host "[OK] gradle-wrapper.jar present" -ForegroundColor Green
 }
 
-# 3. Build
+# 3. Build both supported Minecraft targets
 Write-Host ""
-Write-Host "[...] Building RotProxy (first run downloads Fabric - may take a few minutes)..." -ForegroundColor Yellow
+Write-Host "[...] Building RotProxy for Minecraft 1.21.10 and 1.21.11 (first run downloads Fabric - may take a few minutes)..." -ForegroundColor Yellow
 Write-Host ""
 
-& .\gradlew.bat build
+$targets = @(
+    @{
+        Minecraft = "1.21.10"
+        Yarn = "1.21.10+build.3"
+        FabricApi = "0.138.4+1.21.10"
+        Loader = "0.17.2"
+        Dependency = ">=1.21.10 <1.21.11"
+    },
+    @{
+        Minecraft = "1.21.11"
+        Yarn = "1.21.11+build.4"
+        FabricApi = "0.141.3+1.21.11"
+        Loader = "0.19.1"
+        Dependency = ">=1.21.11 <1.21.12"
+    }
+)
 
-if ($LASTEXITCODE -eq 0) {
+& .\gradlew.bat clean
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "=== BUILD FAILED ===" -ForegroundColor Red
+    Write-Host "Gradle clean failed before building." -ForegroundColor Yellow
+    Write-Host ""
+    Read-Host "Press Enter to exit"
+    exit 1
+}
+
+$builtJars = @()
+
+foreach ($target in $targets) {
+    Write-Host "[...] Building Minecraft $($target.Minecraft)..." -ForegroundColor Yellow
+    & .\gradlew.bat build `
+        "-Pminecraft_version=$($target.Minecraft)" `
+        "-Pyarn_mappings=$($target.Yarn)" `
+        "-Pfabric_version=$($target.FabricApi)" `
+        "-Ploader_version=$($target.Loader)" `
+        "-Pminecraft_dependency=$($target.Dependency)"
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ""
+        Write-Host "=== BUILD FAILED ===" -ForegroundColor Red
+        Write-Host "Minecraft $($target.Minecraft) build failed." -ForegroundColor Yellow
+        Write-Host ""
+        Read-Host "Press Enter to exit"
+        exit 1
+    }
+
+    $jar = Get-ChildItem -Path ".\build\libs\" -Filter "rotproxy-*+mc$($target.Minecraft).jar" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike "*-sources*" } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    if ($jar) {
+        $builtJars += $jar.FullName
+        Write-Host "[OK] $($jar.Name)" -ForegroundColor Green
+    }
+}
+
+if ($builtJars.Count -gt 0) {
     Write-Host ""
     Write-Host "=== BUILD SUCCESSFUL! ===" -ForegroundColor Green
-    $jars = Get-ChildItem -Path ".\build\libs\" -Filter "rotproxy-*.jar" -ErrorAction SilentlyContinue
-    $jar = $jars | Where-Object { $_.Name -notlike "*-sources*" } | Select-Object -First 1
-    if ($jar) {
-        Write-Host ""
-        Write-Host "Mod jar: $($jar.FullName)" -ForegroundColor Cyan
-        Write-Host "Copy it to: $env:APPDATA\.minecraft\mods\" -ForegroundColor Cyan
-        Write-Host ""
-        $open = Read-Host "Open build/libs folder now? (y/n)"
-        if ($open -eq "y") { explorer ".\build\libs\" }
+    Write-Host ""
+    foreach ($jarPath in $builtJars) {
+        Write-Host "Mod jar: $jarPath" -ForegroundColor Cyan
     }
+    Write-Host "Copy the matching version jar to: $env:APPDATA\.minecraft\mods\" -ForegroundColor Cyan
+    Write-Host ""
+    $open = Read-Host "Open build/libs folder now? (y/n)"
+    if ($open -eq "y") { explorer ".\build\libs\" }
 } else {
     Write-Host ""
     Write-Host "=== BUILD FAILED ===" -ForegroundColor Red
-    Write-Host "Common fixes:" -ForegroundColor Yellow
-    Write-Host "  - Check internet connection" -ForegroundColor White
-    Write-Host "  - Run PowerShell as Administrator" -ForegroundColor White
+    Write-Host "No jar files were found after the builds finished." -ForegroundColor Yellow
 }
 
 Write-Host ""

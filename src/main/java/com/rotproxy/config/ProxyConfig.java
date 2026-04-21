@@ -29,6 +29,16 @@ public class ProxyConfig {
     private static boolean enabled = false;
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
+    private static ProxyProfile createBlankProfile(String name) {
+        ProxyProfile profile = new ProxyProfile(name);
+        profile.host = "";
+        profile.port = 0;
+        profile.username = "";
+        profile.password = "";
+        profile.type = ProxyProfile.ProxyType.SOCKS5;
+        return profile;
+    }
+
     // Machine-tied salt using MAC address
     private static String getMachineSalt() {
         try {
@@ -88,7 +98,7 @@ public class ProxyConfig {
     public static void load() {
         profiles.clear();
         if (!Files.exists(CONFIG_PATH)) {
-            profiles.add(new ProxyProfile("Profile 1"));
+            profiles.add(createBlankProfile("Profile 1"));
             return;
         }
         try (Reader reader = Files.newBufferedReader(CONFIG_PATH)) {
@@ -109,7 +119,10 @@ public class ProxyConfig {
             }
         } catch (Exception e) {
             RotProxyMod.LOGGER.error("Failed to load RotProxy config", e);
-            profiles.add(new ProxyProfile("Profile 1"));
+            profiles.add(createBlankProfile("Profile 1"));
+        }
+        if (profiles.isEmpty()) {
+            profiles.add(createBlankProfile("Profile 1"));
         }
         if (activeProfileIndex >= profiles.size()) activeProfileIndex = 0;
     }
@@ -152,7 +165,7 @@ public class ProxyConfig {
     }
 
     public static void addProfile(String name) {
-        profiles.add(new ProxyProfile(name));
+        profiles.add(createBlankProfile(name));
     }
 
     public static void removeProfile(int index) {
@@ -160,5 +173,21 @@ public class ProxyConfig {
             profiles.remove(index);
             if (activeProfileIndex >= profiles.size()) activeProfileIndex = profiles.size() - 1;
         }
+    }
+
+    public static void clearProfile(int index) {
+        if (index < 0 || index >= profiles.size()) {
+            return;
+        }
+
+        String name = profiles.get(index).name;
+        profiles.set(index, createBlankProfile(name == null || name.isBlank() ? "Profile " + (index + 1) : name.trim()));
+    }
+
+    public static void resetAllProfiles() {
+        profiles.clear();
+        profiles.add(createBlankProfile("Profile 1"));
+        activeProfileIndex = 0;
+        enabled = false;
     }
 }

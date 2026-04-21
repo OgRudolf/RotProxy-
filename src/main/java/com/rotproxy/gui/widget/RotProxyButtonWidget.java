@@ -2,23 +2,31 @@ package com.rotproxy.gui.widget;
 
 import com.rotproxy.gui.RotProxyTheme;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.Click;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.narration.NarrationMessageBuilder;
-import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.ClickableWidget;
 import net.minecraft.text.Text;
 
 import java.util.function.Supplier;
 
-public class RotProxyButtonWidget extends ButtonWidget {
+public class RotProxyButtonWidget extends ClickableWidget {
+    @FunctionalInterface
+    public interface PressAction {
+        void onPress(RotProxyButtonWidget button);
+    }
+
     private final Supplier<Text> labelSupplier;
+    private final PressAction pressAction;
 
     public RotProxyButtonWidget(int x, int y, int width, int height, Text message, PressAction onPress) {
         this(x, y, width, height, () -> message, onPress);
     }
 
     public RotProxyButtonWidget(int x, int y, int width, int height, Supplier<Text> labelSupplier, PressAction onPress) {
-        super(x, y, width, height, labelSupplier.get(), onPress, DEFAULT_NARRATION_SUPPLIER);
+        super(x, y, width, height, labelSupplier.get());
         this.labelSupplier = labelSupplier;
+        this.pressAction = onPress;
     }
 
     @Override
@@ -43,6 +51,16 @@ public class RotProxyButtonWidget extends ButtonWidget {
                 getY() + (getHeight() - 8) / 2,
                 textColor
         );
+    }
+
+    @Override
+    public void onClick(Click click, boolean doubleClick) {
+        if (!active || !visible) {
+            return;
+        }
+
+        playDownSound(MinecraftClient.getInstance().getSoundManager());
+        pressAction.onPress(this);
     }
 
     @Override
